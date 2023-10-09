@@ -16,7 +16,7 @@ logger.setLevel(logging.INFO)
 engine = create_engine(os.getenv("TRANSACTIONS_DB"))
 
 
-def handler(event, context):
+def lambda_handler(event, context):
     print(f"event received: {event}")
     bucket, key = get_s3_bucket_key(event)
 
@@ -285,4 +285,4 @@ if __name__ == "__main__":
         ]
     }
 
-    handler(event, {})
+    lambda_handler(event, {})
