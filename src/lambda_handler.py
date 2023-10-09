@@ -1,12 +1,19 @@
 import csv
+import json
 import logging
+import os
 import statistics
 from datetime import datetime
 
 import boto3
+from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+
+engine = create_engine(os.getenv("TRANSACTIONS_DB"))
 
 
 def handler(event, context):
@@ -31,8 +38,8 @@ def get_total_balance(data: list):
     return sum([float(record[2]) for record in data])
 
 
-def get_avg_amount_by_type(data: list, type):
-    if type is None:
+def get_avg_amount_by_type(data: list, type: str):
+    if type is None or not ["debit", "credit"]:
         return 0.0
 
     if type == "debit":
@@ -52,8 +59,6 @@ def get_avg_amount_by_type(data: list, type):
 
 def get_monthly_transactions(data: list):
     monthly_transactions = {}
-
-    # Initialize an empty dictionary to store the grouped dates
     grouped_dates = {}
 
     # Iterate through the date strings and group them by year and month
@@ -80,8 +85,6 @@ def get_monthly_transactions(data: list):
 
     for year in grouped_dates:
         for month in grouped_dates[year]:
-            print(f"iterating over month: {month}")
-
             if year not in monthly_transactions:
                 monthly_transactions[year] = {}
 
@@ -108,21 +111,101 @@ def get_monthly_transactions(data: list):
 
 
 def get_account_report(data: list, account_number: str):
-    total_balance = get_total_balance(data)
-    avg_debit_amount = get_avg_amount_by_type(data, "debit")
-    avg_credit_amount = get_avg_amount_by_type(data, "credit")
-    monthly_transactions = get_monthly_transactions(data)
+    if account_number is None:
+        return {}
 
     account_report = {
         "account_number": account_number,
-        "total_balance": total_balance,
-        "average_debit_amount": avg_debit_amount,
-        "average_credit_amount": avg_credit_amount,
-        "monthly_transactions": monthly_transactions,
+        "total_balance": get_total_balance(data),
+        "average_debit_amount": get_avg_amount_by_type(data, "debit"),
+        "average_credit_amount": get_avg_amount_by_type(data, "credit"),
+        "monthly_transactions": get_monthly_transactions(data),
     }
 
-    print(account_report)
     return account_report
+
+
+def send_message(sqs, message, tries=1, max_tries=3):
+    try:
+        response = sqs.send_message(
+            QueueUrl=os.getenv("EMAIL_NOTIFICATIONS_QUEUE_URL"), MessageBody=message
+        )
+        return response["MessageId"]
+    except Exception as e:
+        if tries <= max_tries:
+            print(f"sending message failed at try: {tries} with error {e}")
+            tries += 1
+            print(f"retry #{tries}…")
+            return send_message(sqs, message, tries, max_tries)
+        else:
+            print("message was not send. Max retries of {max_retries} reached.")
+            return None
+
+
+def get_account_number(key: str):
+    parts = key.split("_")
+
+    if len(parts) == 3:
+        return parts[0]
+
+    return None
+
+
+def looks_like_headers(first_row):
+    return all(isinstance(value, str) for value in first_row)
+
+
+def persist_to_db(account_number: str, transactions: list, account_report: dict):
+    try:
+        with engine.begin() as connection:
+            logger.info("Inserting transactions data into the database.")
+
+            transactions_query = text(
+                "INSERT INTO transactions (account_number, amount, transaction_id, date) "
+                "VALUES (:account_number, :amount, :transaction_id, :date)"
+            )
+
+            # Create a list of dictionaries representing the data
+            transactions_to_insert = [
+                {
+                    "account_number": account_number,
+                    "amount": transaction[2],
+                    "transaction_id": transaction[3],
+                    "date": transaction[1],
+                }
+                for transaction in transactions
+            ]
+
+            report_query = text(
+                "INSERT INTO reports (account_number, total_balance, average_debit_amount, average_credit_amount, monthly_transactions) "
+                "VALUES (:account_number, :total_balance, :average_debit_amount, :average_credit_amount, :monthly_transactions)"
+            )
+
+            report_to_insert = {
+                "account_number": account_report["account_number"],
+                "total_balance": account_report["total_balance"],
+                "average_debit_amount": account_report["average_debit_amount"],
+                "average_credit_amount": account_report["average_credit_amount"],
+                "monthly_transactions": json.dumps(account_report["monthly_transactions"]),
+            }
+
+            # Use a transaction to ensure atomicity
+            try:
+                connection.execute(transactions_query, transactions_to_insert)
+                connection.execute(report_query, report_to_insert)
+                print("transactions and report inserted successfully.")
+                return True
+            except Exception as e:
+                print(e)
+                connection.rollback()  # Rollback the transaction
+            except IntegrityError as e:
+                # Handle any integrity constraint violations here
+                print(f"Integrity error: {e}")
+                connection.rollback()  # Rollback the transaction
+                return False
+    except Exception as e:
+        logger.info(f"Unable to save the record: {e}")
+        return False
 
 
 def transaction_processor(bucket: str, key: str):
@@ -139,7 +222,7 @@ def transaction_processor(bucket: str, key: str):
     csv_reader = csv.reader(file.decode("utf-8").splitlines(), delimiter=",")
     first_row = next(csv_reader)
 
-    if all(isinstance(value, str) for value in first_row):
+    if looks_like_headers(first_row):
         # Skip the actual header row and read the data rows
         data_rows = [row for row in csv_reader]
     else:
@@ -148,12 +231,24 @@ def transaction_processor(bucket: str, key: str):
         # Read the data rows, including the first row
         data_rows = [first_row] + [row for row in csv_reader]
 
-    return get_account_report(data_rows, 123)
+    account_number = get_account_number(key)
 
-    # save all transactions to database
-    # - transactions table
-    # - reports table
-    # save the report in a SQS queue
+    if not account_number:
+        logger.error(f"unable to determine the account number for file: {bucket}/{key}")
+
+    account_report = get_account_report(data_rows, account_number)
+
+    persisted_data = persist_to_db(account_number, data_rows, account_report)
+
+    if not persisted_data:
+        print("error saving to database")
+
+    message_body = json.dumps(account_report)
+
+    sqs = boto3.client("sqs")
+    message_id = send_message(sqs, message_body)
+    if message_id:
+        print(f"message {message_id} sent successfully")
 
 
 if __name__ == "__main__":
