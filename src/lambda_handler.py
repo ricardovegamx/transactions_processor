@@ -28,11 +28,11 @@ def get_s3_bucket_key(event: dict):
     try:
         bucket = event["Records"][0]["s3"]["bucket"]["name"]
         key = event["Records"][0]["s3"]["object"]["key"]
-        
+
         return bucket, key
     except Exception as e:
-        logger.fatal("unable to get bucket and key because error: {error}")
-        
+        logger.fatal(f"unable to get bucket and key because error: {e}")
+
         return None, None
 
 
@@ -246,6 +246,6 @@ def transaction_processor(bucket: str, key: str):
 
     sqs = boto3.client("sqs")
     message_id = send_message(sqs, message_body)
-    
+
     if message_id:
         logger.info(f"message {message_id} sent successfully")
