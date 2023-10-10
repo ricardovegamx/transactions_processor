@@ -40,7 +40,7 @@ def get_total_balance(data: list):
     if len(data) < 1:
         return 0.0
 
-    return sum([float(record[2]) for record in data])
+    return round(sum([float(record[2]) for record in data]), 2)
 
 
 def get_avg_amount_by_type(data: list, type: str):
