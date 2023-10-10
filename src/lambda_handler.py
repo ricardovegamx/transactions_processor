@@ -30,7 +30,7 @@ def get_s3_bucket_key(event: dict):
 
         return bucket, key
     except Exception as e:
-        logger.fatal(f"unable to get bucket and key because error: {e}")
+        logger.error(f"unable to get bucket and key because error: {e}")
 
         return None, None
 
@@ -47,12 +47,14 @@ def get_avg_amount_by_type(data: list, type: str):
         return 0.0
 
     if type == "debit":
+        # segment to debit operations (those with negative values)
         debit_operations = [float(record[2]) for record in data if float(record[2]) < 0]
 
         if len(debit_operations) > 0:
             return round(statistics.mean(debit_operations), 2)
 
     if type == "credit":
+        # segment the credit operations (positive values)
         credit_operations = [float(record[2]) for record in data if float(record[2]) > 0]
 
         if len(credit_operations) > 0:
@@ -61,11 +63,12 @@ def get_avg_amount_by_type(data: list, type: str):
     return 0.0
 
 
-def get_monthly_transactions(data: list):
-    monthly_transactions = {}
-    grouped_dates = {}
+def get_monthly_transactions(transactions: list):
+    grouped_dates = {} # transactions segmented by year and (unordered) months
+    monthly_transactions = {} # transactions segmented by year/month and statistics
 
-    for record in data:
+    # first: segment the transactions by year and month
+    for record in transactions:
         date = datetime.strptime(record[1], "%Y-%m-%d %H:%M:%S")
         year = date.year
         month = date.month
@@ -81,6 +84,7 @@ def get_monthly_transactions(data: list):
         else:
             grouped_dates[year][month].append(record)
 
+    # calculate the stats (avg, count, etc)
     for year in grouped_dates:
         for month in grouped_dates[year]:
             if year not in monthly_transactions:
@@ -104,11 +108,11 @@ def get_monthly_transactions(data: list):
                     grouped_dates[year][month], "credit"
                 ),
             }
-
-    # get the main key
+    
+    # now start sorting the monthly transactions by getting the main key
     year_key = next(iter(monthly_transactions))
 
-    # Sort the keys inside the year dictionary in descending order
+    # sort the keys inside the year dictionary in descending order
     sorted_transactions = {
         year_key: dict(
             sorted(
@@ -143,7 +147,7 @@ def send_message(sqs, message, tries=1, max_retries=3):
         return response["MessageId"]
     except Exception as e:
         if tries <= max_retries:
-            logger.info(f"sending message failed at try: {tries} with error {e}")
+            logger.error(f"sending message failed at try: {tries} with error {e}")
             tries += 1
             logger.info(f"retry #{tries}…")
             return send_message(sqs, message, tries, max_retries)
@@ -162,6 +166,7 @@ def get_account_number(key: str):
 
 
 def looks_like_headers(first_row):
+    # if all values are str, in the case of this CSV format, they are headers
     return all(isinstance(value, str) for value in first_row)
 
 
@@ -199,20 +204,15 @@ def persist_to_db(account_number: str, transactions: list, account_report: dict)
                 "monthly_transactions": json.dumps(account_report["monthly_transactions"]),
             }
 
-            # Use a transaction to ensure atomicity
+            # use a transaction to ensure atomicity
             try:
                 connection.execute(transactions_query, transactions_to_insert)
                 connection.execute(report_query, report_to_insert)
                 logger.info("transactions and report inserted successfully.")
                 return True
-            except Exception as e:
-                logger.info(e)
-                connection.rollback()  # Rollback the transaction
             except IntegrityError as e:
-                # Handle any integrity constraint violations here
-                logger.info(f"Integrity error: {e}")
-                connection.rollback()  # Rollback the transaction
-                return False
+                logger.error(f"integrity error: {e}")
+                connection.rollback()  # rollback the transaction
     except Exception as e:
         logger.info(f"Unable to save the record: {e}")
         return False
