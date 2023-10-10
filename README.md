@@ -121,7 +121,7 @@ Please check the documentation for the other microservices:
     - `TRANSACTIONS_DB`
     - `EMAIL_NOTIFICATIONS_QUEUE_URL`
 
-`EMAIL_NOTIFICATIONS_QUEUE_URL` must be a sqlalchemy format. For example:
+`TRANSACTIONS_DB` must be a sqlalchemy format. For example:
 
 ```bash
 TRANSACTIONS_DB=mysql+mysqlconnector://username:password@host:port/database
