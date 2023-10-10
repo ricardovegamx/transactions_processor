@@ -44,6 +44,28 @@ NOTE: **Please allow some time for the email to arrive, as it is very restrictiv
 
 ![Email](https://rick-vega-assets.s3.us-west-2.amazonaws.com/sample-email.jpg)
 
+## TRY IT YOURSELF
+
+1. Make a request to the API Gateway endpoint with a valid payload.
+
+Make a `POST` request to: `https://qo3djrx06i.execute-api.us-west-2.amazonaws.com/prod/csv`
+
+2. Use this payload:
+
+```json
+{
+    "amount": 1,
+    "rows_min": 10,
+    "rows_max": 15,
+    "min_transaction_amount": -10000,
+    "max_transaction_amount": 20000
+  }
+```
+
+3. Connect to DATABASE and check the `transactions` and `reports` tables. **Credentials are available via email**.
+
+4. Check the email inbox: [https://maildrop.cc/inbox/?mailbox=rick-vega-reports-inbox](https://maildrop.cc/inbox/?mailbox=rick-vega-reports-inbox). _Please allow some time for the email to arrive._ Maildrop is very restrictive with limits.
+
 
 ## DATABASE SCHEMA
 
