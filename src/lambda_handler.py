@@ -13,7 +13,6 @@ from sqlalchemy.exc import IntegrityError
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-
 engine = create_engine(os.getenv("TRANSACTIONS_DB"))
 
 
@@ -106,7 +105,19 @@ def get_monthly_transactions(data: list):
                 ),
             }
 
-    return monthly_transactions
+    # get the main key
+    year_key = next(iter(monthly_transactions))
+
+    # Sort the keys inside the year dictionary in descending order
+    sorted_transactions = {
+        year_key: dict(
+            sorted(
+                monthly_transactions[year_key].items(), key=lambda item: int(item[0]), reverse=True
+            )
+        )
+    }
+
+    return sorted_transactions
 
 
 def get_account_report(data: list, account_number: str):
@@ -210,6 +221,7 @@ def persist_to_db(account_number: str, transactions: list, account_report: dict)
 def transaction_processor(bucket: str, key: str):
     file = None
 
+    # try to get the file with transactions from S3
     try:
         s3 = boto3.client("s3")
         response = s3.get_object(Bucket=bucket, Key=key)
@@ -219,9 +231,13 @@ def transaction_processor(bucket: str, key: str):
         logger.error(f"error: unable to download the file from s3 - {e}")
         sys.exit(-1)
 
+    # load the file
     csv_reader = csv.reader(file.decode("utf-8").splitlines(), delimiter=",")
+
+    # validation: check if the file has headers
     first_row = next(csv_reader)
 
+    # define what the transactions will be (with and without headers)
     if looks_like_headers(first_row):
         data_rows = [row for row in csv_reader]
     else:
@@ -230,20 +246,24 @@ def transaction_processor(bucket: str, key: str):
 
     account_number = get_account_number(key)
 
+    # catch if the naming convention of the files has been changed
     if not account_number:
         logger.error(f"unable to determine the account number for file: {bucket}/{key}")
         sys.exit(-1)
 
+    # generate the account report (averages, totals, count of transactions…)
     account_report = get_account_report(data_rows, account_number)
 
+    # save to database the info related to the account
     persisted_data = persist_to_db(account_number, data_rows, account_report)
 
     if not persisted_data:
-        logger.info("error saving to database")
+        logger.error("error saving to database")
         sys.exit(-1)
 
     message_body = json.dumps(account_report)
 
+    # send msg to queue (it will trigger the mailing service)
     sqs = boto3.client("sqs")
     message_id = send_message(sqs, message_body)
 
