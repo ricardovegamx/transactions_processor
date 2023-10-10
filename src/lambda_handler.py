@@ -64,8 +64,8 @@ def get_avg_amount_by_type(data: list, type: str):
 
 
 def get_monthly_transactions(transactions: list):
-    grouped_dates = {} # transactions segmented by year and (unordered) months
-    monthly_transactions = {} # transactions segmented by year/month and statistics
+    grouped_dates = {}  # transactions segmented by year and (unordered) months
+    monthly_transactions = {}  # transactions segmented by year/month and statistics
 
     # first: segment the transactions by year and month
     for record in transactions:
@@ -108,7 +108,7 @@ def get_monthly_transactions(transactions: list):
                     grouped_dates[year][month], "credit"
                 ),
             }
-    
+
     # now start sorting the monthly transactions by getting the main key
     year_key = next(iter(monthly_transactions))
 
